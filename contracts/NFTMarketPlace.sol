@@ -5,65 +5,92 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 
-error NOT_SELLER();
+error NOT_A_SELLER();
+error INSUFFICIENT_FUND();
+error NOT_LISTED();
+error NFT_NOT_FOUND();
+error ALREADY_LISTED();
+error NOT_OWNER();
 
 contract NFTMarketPlace is ERC721, Ownable, ERC721URIStorage {
-    uint256 private nextTokenId;
+    uint256 nextTokenId;
 
-    event PurchaseMade(
+    struct Transaction {
+        string description;
+        uint256 amount;
+        address seller;
+        bool isListed;
+    }
+
+    mapping(uint256 => Transaction) public transaction;
+
+    mapping(address => bool) private validSeller;
+
+    constructor(address _owner) ERC721("WCXNFT", "WCX") Ownable(_owner) {}
+
+    event successful(
         address indexed buyer,
         uint256 indexed tokenId,
-        uint256 price
+        uint256 amount
     );
 
-    struct Sale {
-        address seller;
-        string name;
-        uint256 price;
-        bool isActive;
-    }
-
-    mapping(uint256 => Sale) public sales;
-    mapping(address => bool) private isSeller;
-
-    constructor(
-        address _initialOwner
-    ) ERC721("WCXNFT", "WCX") Ownable(_initialOwner) {}
-
-    function addSeller(address _seller) external onlyOwner {
-        isSeller[_seller] = true;
-    }
-
-    function safeMint(address to, string memory uri) external onlyOwner {
-        uint256 _tokenId = nextTokenId++;
-        _safeMint(to, _tokenId);
-        _setTokenURI(_tokenId, uri);
-    }
-
-    function listForSale(
-        uint256 tokenId,
-        uint256 _price,
-        string calldata _name
+    function createSale(
+        uint256 _tokenId,
+        string memory _description,
+        uint256 _amount
     ) external {
-        require(isSeller[msg.sender], "Caller is not a seller");
-        require(ownerOf(tokenId) == msg.sender, "Not the owner");
-        require(!sales[tokenId].isActive, "NFT is already listed for sale");
-        sales[tokenId] = Sale(msg.sender, _name, _price, true);
+        if (!validSeller[msg.sender]) {
+            revert NOT_A_SELLER();
+        }
+
+        if (msg.sender != ownerOf(_tokenId)) {
+            revert NOT_OWNER();
+        }
+
+        if (transaction[_tokenId].isListed) {
+            revert ALREADY_LISTED();
+        }
+
+        Transaction storage newSale = transaction[_tokenId];
+
+        newSale.amount = _amount;
+        newSale.isListed = true;
+        newSale.description = _description;
+        newSale.seller = msg.sender;
     }
 
     function buy(uint256 tokenId) external payable {
-        require(sales[tokenId].isActive, "NFT not listed for sale");
-        require(msg.value >= sales[tokenId].price, "Insufficient funds");
+        if (tokenId > nextTokenId) {
+            revert NFT_NOT_FOUND();
+        }
 
-        address seller = sales[tokenId].seller;
+        if (!transaction[tokenId].isListed) {
+            revert NOT_LISTED();
+        }
 
-        payable(seller).transfer(sales[tokenId].price);
+        if (msg.value < transaction[tokenId].amount) {
+            revert INSUFFICIENT_FUND();
+        }
 
-        _safeTransfer(seller, msg.sender, tokenId);
+        address sellerAddress = transaction[tokenId].seller;
 
-        sales[tokenId].isActive = false;
+        payable(sellerAddress).transfer(transaction[tokenId].amount);
 
-        emit PurchaseMade(msg.sender, tokenId, sales[tokenId].price);
+        _safeTransfer(sellerAddress, msg.sender, tokenId);
+
+        transaction[tokenId].isListed = false;
+
+        emit successful(msg.sender, tokenId, transaction[tokenId].amount);
+    }
+
+    function addSeller(address _seller) external onlyOwner {
+        validSeller[_seller] = true;
+    }
+
+    function safeMint(address _to, string memory _uri) external onlyOwner {
+        uint256 _tokenId = nextTokenId++;
+        _safeMint(_to, _tokenId);
+        _setTokenURI(_tokenId, _uri);
     }
 
     function tokenURI(
@@ -78,5 +105,3 @@ contract NFTMarketPlace is ERC721, Ownable, ERC721URIStorage {
         return super.supportsInterface(interfaceId);
     }
 }
-
-// 1000000000000000000
